@@ -21,17 +21,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?
         .to_runtime_api::<polkadot::RuntimeApi<DefaultConfig, PolkadotExtrinsicParams<DefaultConfig>>>();
 
-    // Submit the `transfer` extrinsic from Alice's account to Bob's.
-    let dest = AccountKeyring::Bob.to_account_id().into();
+    tokio::spawn(async move {
+        let dest = AccountKeyring::Bob.to_account_id().into();
 
-    // Obtain an extrinsic, calling the "transfer" function in
-    // the "balances" pallet.
-    let extrinsic = api.tx().balances().transfer(dest, 123_456_789_012_345)?;
+        // Obtain an extrinsic, calling the "transfer" function in
+        // the "balances" pallet.
+        let extrinsic = match api.tx().balances().transfer(dest, 123_456_789_012_345) {
+            Ok(extrinsic) => extrinsic,
+            Err(_) => { return }
+        };
 
-    // Sign and submit the extrinsic, returning its hash.
-    let tx_hash = extrinsic.sign_and_submit_default(&signer).await?;
+        // Sign and submit the extrinsic, returning its hash.
+        let tx_hash = match extrinsic.sign_and_submit_default(&signer).await {
+            Ok(tx_hash) => tx_hash,
+            Err(_) => { return }
+        };
 
-    println!("Balance transfer extrinsic submitted: {}", tx_hash);
+        println!("Balance transfer extrinsic submitted: {}", tx_hash);
+    }).await?;
 
     Ok(())
 }
