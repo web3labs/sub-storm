@@ -1,3 +1,5 @@
+#![allow(clippy::needless_range_loop)]
+
 use sp_keyring::AccountKeyring;
 use subxt::{ClientBuilder, DefaultConfig, PairSigner, PolkadotExtrinsicParams};
 
@@ -46,11 +48,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     for index in 0..num_steps {
-        api.client
-            .rpc()
-            .submit_extrinsic(vec[index].clone())
-            .await
-            .unwrap();
+        if let Err(e) = api.client.rpc().submit_extrinsic(vec[index].clone()).await {
+            println!("Step {index} failed: {e}");
+        }
 
         println!("Step {}", index);
     }
