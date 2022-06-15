@@ -1,11 +1,7 @@
 use sp_keyring::AccountKeyring;
-use subxt::{
-    ClientBuilder,
-    DefaultConfig,
-    PairSigner,
-    PolkadotExtrinsicParams,
-};
-use std::sync::Arc;
+use subxt::{ClientBuilder, DefaultConfig, PairSigner, PolkadotExtrinsicParams};
+
+const TX_POOL_LIMIT: usize = 8192;
 
 #[subxt::subxt(runtime_metadata_path = "polkadot_metadata.scale")]
 pub mod polkadot {}
@@ -14,36 +10,49 @@ pub mod polkadot {}
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
-    let signer = Arc::new(PairSigner::new(AccountKeyring::Alice.pair()));
-
     let api = ClientBuilder::new()
-        .set_url("ws://127.0.0.1:9944")
+        .set_url("ws://localhost:9944")
         .build()
         .await?
         .to_runtime_api::<polkadot::RuntimeApi<DefaultConfig, PolkadotExtrinsicParams<DefaultConfig>>>();
-    let api = Arc::new(api);
 
-    for _ in 0..5 {
-        let api = api.clone();
-        let signer = signer.clone();
-        tokio::spawn(async move {
-            let dest = AccountKeyring::Bob.to_account_id().into();
+    let alice = AccountKeyring::Alice.to_account_id();
+    let alice_acc = api.storage().system().account(&alice, None).await?;
 
-            // Obtain an extrinsic, calling the "transfer" function in
-            // the "balances" pallet.
-            let extrinsic = match api.tx().balances().transfer(dest, 1) {
-                Ok(extrinsic) => extrinsic,
-                Err(_) => { return }
-            };
+    let mut signer = PairSigner::new(AccountKeyring::Alice.pair());
+    let dest = AccountKeyring::Bob.to_account_id();
 
-            // Sign and submit the extrinsic, returning its hash.
-            let tx_hash = match extrinsic.sign_and_submit_default(&*signer).await {
-                Ok(tx_hash) => tx_hash,
-                Err(_) => { return }
-            };
+    signer.set_nonce(alice_acc.nonce);
 
-            println!("Balance transfer extrinsic submitted: {}", tx_hash);
-        }).await?;
+    let num_steps = TX_POOL_LIMIT - 2;
+    let mut vec = Vec::with_capacity(num_steps);
+
+    for index in 0..num_steps {
+        let extrinsic = api
+            .tx()
+            .balances()
+            .transfer(dest.clone().into(), 123_456_789_012_445)?;
+
+        let encoded = extrinsic
+            .create_signed(&signer, Default::default())
+            .await
+            .unwrap();
+
+        vec.push(encoded);
+
+        signer.increment_nonce();
+
+        println!("Step {}", index);
+    }
+
+    for index in 0..num_steps {
+        api.client
+            .rpc()
+            .submit_extrinsic(vec[index].clone())
+            .await
+            .unwrap();
+
+        println!("Step {}", index);
     }
 
     Ok(())
