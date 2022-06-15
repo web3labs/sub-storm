@@ -2,18 +2,28 @@
 
 use sp_keyring::AccountKeyring;
 use subxt::{ClientBuilder, DefaultConfig, PairSigner, PolkadotExtrinsicParams};
+use clap::Parser;
 
 const TX_POOL_LIMIT: usize = 8192;
 
 #[subxt::subxt(runtime_metadata_path = "polkadot_metadata.scale")]
 pub mod polkadot {}
 
+#[derive(Parser, Debug)]
+#[clap(author, version, about, long_about = None)]
+struct Args {
+    #[clap(short, long, value_parser)]
+    ws_url: String,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
+    let args = Args::parse();
+
     let api = ClientBuilder::new()
-        .set_url("ws://localhost:9944")
+        .set_url(args.ws_url)
         .build()
         .await?
         .to_runtime_api::<polkadot::RuntimeApi<DefaultConfig, PolkadotExtrinsicParams<DefaultConfig>>>();
