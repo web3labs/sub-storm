@@ -1,10 +1,15 @@
 #![allow(clippy::needless_range_loop)]
 
-use sp_keyring::AccountKeyring;
-use subxt::{ClientBuilder, DefaultConfig, PairSigner, PolkadotExtrinsicParams};
+use std::{thread::sleep, time::Duration};
+
 use clap::Parser;
+use polkadot::RuntimeApi;
+use sp_keyring::{sr25519::sr25519::Pair, AccountKeyring};
+use subxt::{ClientBuilder, DefaultConfig, PairSigner, PolkadotExtrinsicParams};
 
 const TX_POOL_LIMIT: usize = 8192;
+const TX_BATCH_SIZE: usize = TX_POOL_LIMIT;
+const SLEEP_BETWEEN_BATCHES_SECONDS: u64 = 6;
 
 #[subxt::subxt(runtime_metadata_path = "polkadot_metadata.scale")]
 pub mod polkadot {}
@@ -14,6 +19,18 @@ pub mod polkadot {}
 struct Args {
     #[clap(short, long, value_parser)]
     ws_url: String,
+}
+
+async fn reset_alice_nonce(
+    api: &RuntimeApi<DefaultConfig, PolkadotExtrinsicParams<DefaultConfig>>,
+    signer: &mut PairSigner<DefaultConfig, Pair>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let alice = AccountKeyring::Alice.to_account_id();
+
+    let alice_acc = api.storage().system().account(&alice, None).await?;
+    signer.set_nonce(alice_acc.nonce);
+
+    Ok(())
 }
 
 #[tokio::main]
@@ -28,41 +45,53 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?
         .to_runtime_api::<polkadot::RuntimeApi<DefaultConfig, PolkadotExtrinsicParams<DefaultConfig>>>();
 
-    let alice = AccountKeyring::Alice.to_account_id();
-    let alice_acc = api.storage().system().account(&alice, None).await?;
-
     let mut signer = PairSigner::new(AccountKeyring::Alice.pair());
     let dest = AccountKeyring::Bob.to_account_id();
 
-    signer.set_nonce(alice_acc.nonce);
+    reset_alice_nonce(&api, &mut signer).await?;
 
-    let num_steps = TX_POOL_LIMIT - 2;
-    let mut vec = Vec::with_capacity(num_steps);
-
-    for index in 0..num_steps {
+    let mut current_batch_size = 0;
+    for index in 1..u64::MAX {
         let extrinsic = api
             .tx()
             .balances()
             .transfer(dest.clone().into(), 123_456_789_012_445)?;
 
-        let encoded = extrinsic
-            .create_signed(&signer, Default::default())
-            .await
-            .unwrap();
+        println!("Sent tx number {}", index);
 
-        vec.push(encoded);
+        match extrinsic.sign_and_submit_default(&signer).await {
+            Ok(tx_hash) => {
+                println!("Got Result Ok({tx_hash:})");
 
-        signer.increment_nonce();
+                signer.increment_nonce();
 
-        println!("Step {}", index);
-    }
+                current_batch_size += 1;
+            }
+            Err(message) => {
+                println!("Got Result Err({message:})");
+                println!("Will sleep for {} seconds", SLEEP_BETWEEN_BATCHES_SECONDS);
 
-    for index in 0..num_steps {
-        if let Err(e) = api.client.rpc().submit_extrinsic(vec[index].clone()).await {
-            println!("Step {index} failed: {e}");
+                sleep(Duration::from_secs(SLEEP_BETWEEN_BATCHES_SECONDS));
+
+                /*
+                    For some reason the extrinsics flow breaks and the local nonce keeps increasing,
+                    whereas the on-chain nonce stays the same. That indicates that an extrinsic may
+                    be lost. In order to counter that, we'll manually re-fetch the nonce, so we can
+                    be sure that the flow is contiguous.
+                */
+                reset_alice_nonce(&api, &mut signer).await?;
+
+                current_batch_size = 0;
+            }
         }
 
-        println!("Step {}", index);
+        if current_batch_size != 0 && current_batch_size % TX_BATCH_SIZE as u64 == 0 {
+            println!("Will sleep for {} seconds", SLEEP_BETWEEN_BATCHES_SECONDS);
+
+            sleep(Duration::from_secs(SLEEP_BETWEEN_BATCHES_SECONDS));
+
+            current_batch_size = 0;
+        }
     }
 
     Ok(())
