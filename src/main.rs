@@ -55,7 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let extrinsic = api
             .tx()
             .balances()
-            .transfer(dest.clone().into(), 123_456_789_012_445)?;
+            .transfer(dest.clone().into(), 123)?;
 
         println!("Sent tx number {}", index);
 
